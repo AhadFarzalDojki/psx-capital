@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PSX Portfolio Tracker</title>
+  <style>
+    /* All the styles from your original site are here */
+    body { margin: 0; font-family: 'Segoe UI', sans-serif; background: linear-gradient(135deg, #0a0f16 0%, #111c2e 100%); color: #cbd5e1; display: flex; flex-direction: column; align-items: center; padding: 0 15px 40px; }
+    a { color: #00ffc8; text-decoration: none; font-weight: 600; }
+    nav.navbar { width: 100%; max-width: 980px; background: #111c2e; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,255,200,0.15); margin: 20px 0 30px; padding: 12px 0; display: flex; justify-content: center; gap: 30px; font-size: 1.15rem; }
+    .hero { text-align: center; margin-bottom: 40px; }
+    .card-summary { max-width: 900px; width: 100%; display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 20px; margin-bottom: 30px; }
+    .card { background-color: #1a1a1a; border-radius: 14px; padding: 28px 20px; text-align: center; box-shadow: 0 8px 15px rgba(0, 255, 200, 0.12); }
+    .card h3 { font-weight: 700; font-size: 1.2rem; margin-bottom: 12px; color: #00ffc8; }
+    .card span { font-weight: 900; font-size: 1.7rem; color: #00ffc8; }
+    .benchmark-summary { max-width: 900px; width: 100%; background: #111c2e; border-radius: 14px; box-shadow: 0 4px 12px rgba(0,255,200,0.15); padding: 25px 30px; margin-bottom: 50px; text-align: center; }
+    .benchmark-summary h2 { color: #00ffc8; margin-top: 0; margin-bottom: 20px; }
+    .benchmark-comparison { display: flex; justify-content: space-around; gap: 20px; }
+    .benchmark-metric h4 { margin: 0 0 8px; color: #94a3b8; }
+    .benchmark-metric span { font-size: 2rem; font-weight: 900; }
+    table { width: 100%; max-width: 900px; border-collapse: collapse; margin-bottom: 50px; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 15px rgba(0,255,200,0.15); }
+    th, td { padding: 14px 12px; text-align: center; border-bottom: 1px solid #2a374a; }
+    thead { background: #0a192f; }
+    th { color: #00ffc8; }
+    .profit { color: #4ade80; }
+    .loss { color: #f87171; }
+    #adminControls { max-width: 600px; padding: 22px; background: #222c44; border-radius: 16px; margin-bottom: 40px; }
+    #adminControls input { width: 110px; margin: 5px; padding: 10px; border-radius: 10px; border: none; background: #15203a; color: #00ffc8; }
+  </style>
+</head>
+<body>
+  <nav class="navbar"><a href="index.html">Home</a></nav>
+  <div id="authButtons"></div>
+  <p id="userStatus">Checking login...</p>
+  <div class="hero"><h1>PSX Portfolio Tracker</h1></div>
+  <section class="card-summary">
+    <article class="card"><h3>Total Invested</h3><span id="totalInvested">$0.00</span></article>
+    <article class="card"><h3>Total Value</h3><span id="totalValue">$0.00</span></article>
+    <article class="card"><h3>Realized P/L</h3><span id="realizedPL">$0.00</span></article>
+    <article class="card"><h3>Unrealized P/L</h3><span id="unrealizedPL">$0.00 (0.0%)</span></article>
+  </section>
+  <section class="benchmark-summary">
+    <h2>Portfolio vs. Benchmark (KSE 100)</h2>
+    <div class="benchmark-comparison">
+      <div><h4>Our Return</h4><span id="ourReturn">...</span></div>
+      <div><h4>KSE 100 Return</h4><span id="benchmarkReturn">...</span></div>
+    </div>
+  </section>
+  <div id="adminControls" style="display:none;">
+    <h3>Admin Controls</h3>
+    <input id="symbol" placeholder="Symbol" /><input id="shares" type="number" placeholder="Shares" /><input id="price" type="number" placeholder="Price" /><input id="date" placeholder="Date (dd/mm/yyyy)" /><button onclick="addInvestment()">Add</button>
+  </div>
+  <table>
+    <thead><tr><th>Symbol</th><th>Shares</th><th>Buy Price</th><th>Current Price</th><th>Value</th><th>P/L</th><th>Actions</th></tr></thead>
+    <tbody id="holdingsTableBody"></tbody>
+  </table>
+  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-auth.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+  <script>
+    // --- START: NEW PSX TRACKER SCRIPT ---
+    const firebaseConfig = {
+      apiKey: "AIzaSyD7A2iVNxym_JexlMG28oLSD9RNvkn0uhU",
+      authDomain: "psx-tracker-a45fe.firebaseapp.com",
+      projectId: "psx-tracker-a45fe",
+      storageBucket: "psx-tracker-a45fe.appspot.com",
+      messagingSenderId: "995675624793",
+      appId: "1:995675624793:web:ecf123af01beb261e16848",
+      measurementId: "G-RSMPPCQ3LJ"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+    const auth = firebase.auth();
+    let isAdmin = false;
+
+    const fmt = n => "₨" + (Number(n) || 0).toFixed(2); // Using Rupees symbol
+
+    async function renderPage(investments, priceCache, benchmarkCache) {
+      document.getElementById("adminControls").style.display = isAdmin ? "block" : "none";
+      let totalInvested = 0, totalValue = 0;
+      for (const inv of Object.values(investments)) {
+        totalInvested += inv.shares * inv.price;
+        totalValue += inv.shares * (priceCache[inv.symbol] || 0);
+      }
+      const unrealizedPL = totalValue - totalInvested;
+      document.getElementById("totalInvested").textContent = fmt(totalInvested);
+      document.getElementById("totalValue").textContent = fmt(totalValue);
+      const unrealizedPLSpan = document.getElementById("unrealizedPL");
+      unrealizedPLSpan.textContent = `${fmt(unrealizedPL)} (${(totalInvested > 0 ? (unrealizedPL / totalInvested) * 100 : 0).toFixed(1)}%)`;
+      unrealizedPLSpan.className = unrealizedPL >= 0 ? "profit" : "loss";
+      
+      const ourReturnEl = document.getElementById('ourReturn');
+      const benchmarkReturnEl = document.getElementById('benchmarkReturn');
+      ourReturnEl.textContent = `${(benchmarkCache.ourReturn || 0).toFixed(2)}%`;
+      ourReturnEl.className = (benchmarkCache.ourReturn || 0) >= 0 ? 'profit' : 'loss';
+      benchmarkReturnEl.textContent = `${(benchmarkCache.benchmarkReturn || 0).toFixed(2)}%`;
+      benchmarkReturnEl.className = (benchmarkCache.benchmarkReturn || 0) >= 0 ? 'profit' : 'loss';
+
+      const holdingsTbody = document.getElementById("holdingsTableBody");
+      holdingsTbody.innerHTML = Object.keys(investments).length === 0 ? `<tr><td colspan="7">No holdings</td></tr>` : Object.entries(investments).map(([id, inv]) => {
+        const currentPrice = priceCache[inv.symbol] || 0;
+        const value = currentPrice * inv.shares;
+        const pl = value - (inv.shares * inv.price);
+        return `<tr><td>${inv.symbol}</td><td>${inv.shares}</td><td>${fmt(inv.price)}</td><td>${fmt(currentPrice)}</td><td>${fmt(value)}</td><td class="${pl >= 0 ? 'profit' : 'loss'}">${fmt(pl)}</td><td>${isAdmin ? `<button onclick="deleteInvestment('${id}')">Delete</button>` : ''}</td></tr>`;
+      }).join('');
+    }
+    
+    auth.onAuthStateChanged(async user => {
+        const authButtons = document.getElementById("authButtons");
+        if (user) {
+            const roleSnap = await db.ref(`roles/${user.uid}`).once("value");
+            isAdmin = roleSnap.val() === "admin";
+            authButtons.innerHTML = `Logged in as <strong>${user.email}</strong>${isAdmin ? " (Admin)" : ""}<button onclick="logout()">Logout</button>`;
+        } else {
+            isAdmin = false;
+            authButtons.innerHTML = `<input id="loginEmail" placeholder="Email"/><input id="loginPass" placeholder="Password"/><button onclick="login()">Login</button>`;
+        }
+    });
+
+    db.ref().on('value', snapshot => {
+        const data = snapshot.val() || {};
+        renderPage(data.investments || {}, data.priceCache || {}, data.benchmarkCache || {});
+    });
+
+    window.login = () => auth.signInWithEmailAndPassword(document.getElementById("loginEmail").value, document.getElementById("loginPass").value).catch(e => alert(e.message));
+    window.logout = () => auth.signOut();
+    window.addInvestment = () => {
+        if (!isAdmin) return;
+        const symbol = document.getElementById("symbol").value.trim().toUpperCase();
+        const shares = parseFloat(document.getElementById("shares").value);
+        const price = parseFloat(document.getElementById("price").value);
+        const date = document.getElementById("date").value.trim();
+        if (!symbol || !shares || !price || !/^\d{2}\/\d{2}\/\d{4}$/.test(date)) return alert("Please fill all fields.");
+        db.ref("investments").push({ symbol, shares, price, date });
+    };
+    window.deleteInvestment = (id) => {
+        if (!isAdmin || !confirm("Delete?")) return;
+        db.ref(`investments/${id}`).remove();
+    };
+    // --- END: NEW PSX TRACKER SCRIPT ---
+  </script>
+</body>
+</html>
